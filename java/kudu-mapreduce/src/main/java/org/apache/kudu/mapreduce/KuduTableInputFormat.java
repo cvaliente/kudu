@@ -161,15 +161,7 @@ public class KuduTableInputFormat extends InputFormat<NullWritable, RowResult>
       }
       return splits;
     } finally {
-      shutdownClient();
-    }
-  }
-
-  private void shutdownClient() throws IOException {
-    try {
-      client.shutdown();
-    } catch (Exception e) {
-      throw new IOException(e);
+      shutdownClient(client);
     }
   }
 
@@ -214,12 +206,7 @@ public class KuduTableInputFormat extends InputFormat<NullWritable, RowResult>
 
     String tableName = conf.get(INPUT_TABLE_KEY);
     String masterAddresses = conf.get(MASTER_ADDRESSES_KEY);
-    this.operationTimeoutMs = conf.getLong(OPERATION_TIMEOUT_MS_KEY,
-                                           AsyncKuduClient.DEFAULT_OPERATION_TIMEOUT_MS);
-    this.client = new KuduClient.KuduClientBuilder(masterAddresses)
-                                .defaultOperationTimeoutMs(operationTimeoutMs)
-                                .build();
-    KuduTableMapReduceUtil.importCredentialsFromCurrentSubject(client);
+    this.client = getKuduClient();
     this.nameServer = conf.get(NAME_SERVER_KEY);
     this.cacheBlocks = conf.getBoolean(SCAN_CACHE_BLOCKS, false);
     this.isFaultTolerant = conf.getBoolean(FAULT_TOLERANT_SCAN, false);
@@ -260,6 +247,26 @@ public class KuduTableInputFormat extends InputFormat<NullWritable, RowResult>
       }
     } catch (IOException e) {
       throw new RuntimeException("unable to deserialize predicates from the configuration", e);
+    }
+  }
+
+  private KuduClient getKuduClient() {
+
+    String masterAddresses = conf.get(MASTER_ADDRESSES_KEY);
+    this.operationTimeoutMs = conf.getLong(OPERATION_TIMEOUT_MS_KEY,
+        AsyncKuduClient.DEFAULT_OPERATION_TIMEOUT_MS);
+    KuduClient kuduClient = new KuduClient.KuduClientBuilder(masterAddresses)
+        .defaultOperationTimeoutMs(operationTimeoutMs)
+        .build();
+    KuduTableMapReduceUtil.importCredentialsFromCurrentSubject(kuduClient);
+    return kuduClient;
+  }
+
+  private void shutdownClient(KuduClient kuduClient) throws IOException {
+    try {
+      kuduClient.shutdown();
+    } catch (Exception e) {
+      throw new IOException(e);
     }
   }
 
@@ -384,6 +391,7 @@ public class KuduTableInputFormat extends InputFormat<NullWritable, RowResult>
     private RowResultIterator iterator;
     private KuduScanner scanner;
     private TableSplit split;
+    private KuduClient kuduClient;
 
     @Override
     public void initialize(InputSplit inputSplit, TaskAttemptContext taskAttemptContext)
@@ -393,9 +401,10 @@ public class KuduTableInputFormat extends InputFormat<NullWritable, RowResult>
       }
 
       split = (TableSplit) inputSplit;
+      kuduClient = getKuduClient();
       LOG.debug("Creating scanner for token: {}",
-                KuduScanToken.stringifySerializedToken(split.getScanToken(), client));
-      scanner = KuduScanToken.deserializeIntoScanner(split.getScanToken(), client);
+                KuduScanToken.stringifySerializedToken(split.getScanToken(), kuduClient));
+      scanner = KuduScanToken.deserializeIntoScanner(split.getScanToken(), kuduClient);
 
       // Calling this now to set iterator.
       tryRefreshIterator();
@@ -452,7 +461,7 @@ public class KuduTableInputFormat extends InputFormat<NullWritable, RowResult>
       } catch (Exception e) {
         throw new IOException(e);
       }
-      shutdownClient();
+      shutdownClient(kuduClient);
     }
   }
 }
